@@ -25,3 +25,55 @@ body {
     )
     rgb(var(--background-start-rgb));
 }
+
+.wallet-button-container .wallet-adapter-button-start-icon img {
+  width: 20px !important;   /* Adjust this value as needed */
+  height: 20px !important;  /* Adjust this value as needed */
+  min-width: 16px !important;
+}
+
+/* Perfect Phantom purple styling */
+/* Style for the WalletMultiButton */
+.phantom-purple-button .wallet-adapter-button {
+  background: linear-gradient(135deg, #7B61FF 0%, #4E44CE 100%) !important;
+  color: white !important;
+  display: inline-flex !important; /* Make it flex to align icon and text */
+  align-items: center !important;  /* Vertically center the icon and text */
+  padding: 0.2rem 1rem;
+  border-radius: 1rem;
+  height: 40px;
+  transition: all 0.2s ease !important;
+  justify-content: center; /* Ensure content is centered in button */
+}
+
+/* Ensure gap is applied between icon and text */
+.phantom-purple-button .wallet-adapter-button > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 1rem; /* Adjust the gap between icon and text */
+}
+
+/* Adjust the hover effect */
+.phantom-purple-button .wallet-adapter-button:hover {
+  background: linear-gradient(135deg, #8B71FF 0%, #5E54DE 100%) !important;
+  transform: translateY(-1px);
+}
+
+/* Adjust icon size */
+.phantom-purple-button .wallet-adapter-button-start-icon img {
+  width: 18px !important;
+  height: 18px !important;
+  filter: none !important; /* Keep the default color */
+}
+
+/* Optional: Style the text if needed */
+.phantom-purple-button .wallet-adapter-button span {
+  font-size: 14px !important;
+  font-weight: bold;
+}
+
+/* Hides the menu items inside the WalletMultiButton dropdown */
+.wallet-adapter-dropdown-list {
+  display: none !important;
+}
+
