@@ -77,3 +77,66 @@ body {
   display: none !important;
 }
 
+/* Fixes modal appearing behind elements */
+.wallet-adapter-modal {
+  z-index: 9999 !important;
+}
+
+/* Makes button text white */
+.wallet-adapter-button {
+  color: white !important;
+}
+
+/* Fixes icon alignment */
+.wallet-adapter-button-start-icon {
+  display: flex !important;
+  align-items: center !important;
+}
+
+/* Fix button click area */
+.wallet-adapter-button {
+  height: 40px !important;
+  padding: 0 16px !important;
+  white-space: nowrap !important;
+}
+
+/* Button hover effects */
+.wallet-adapter-button:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 4px 12px rgba(123, 97, 255, 0.3) !important;
+}
+
+/* Click feedback */
+.wallet-adapter-button:active {
+  transform: translateY(0) !important;
+}
+
+/* Balance refresh animation */
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+.balance-updating {
+  animation: pulse 1.5s infinite;
+}
+
+@layer components {
+  .credit-score-poor {
+    @apply text-red-400;
+    stroke: #FC8181;
+  }
+  .credit-score-fair {
+    @apply text-yellow-400;
+    stroke: #F6AD55;
+  }
+  .credit-score-good {
+    @apply text-blue-400;
+    stroke: #63B3ED;
+  }
+  .credit-score-excellent {
+    @apply text-green-400;
+    stroke: #68D391;
+  }
+}
