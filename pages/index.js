@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic';
 import { useConnection, useWallet } from '@solana/wallet-adapter-react';
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { useRouter } from 'next/router'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -13,7 +14,7 @@ const WalletMultiButton = dynamic(
 )
 
 export default function Home() {
-  
+  const router = useRouter() // Initialize router
   const { connection } = useConnection()
   const { publicKey } = useWallet()
   const [balance, setBalance] = useState(null)
@@ -29,6 +30,16 @@ export default function Home() {
       .then(bal => setBalance(bal / LAMPORTS_PER_SOL))
       .catch(console.error);
   }, [publicKey, connection]);
+
+  useEffect(() => {
+    if (publicKey) {
+      // Redirect to dashboard after 1 second (adjust timing as needed)
+      const timer = setTimeout(() => {
+        router.push('/dashboard') // Change this to your desired route
+      }, 1000)
+      return () => clearTimeout(timer)
+    }
+  }, [publicKey, router])
 
   return (
     <main

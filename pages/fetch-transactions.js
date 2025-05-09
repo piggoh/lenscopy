@@ -1,106 +1,78 @@
 import fetch from 'node-fetch';
-import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
 
-// Configuration - MUST UPDATE THESE
-const CONFIG = {
-  HELIUS_API_KEY: '77e76692-d441-4212-96ea-79b93c83a2ad', // REPLACE THIS
-  WALLET_ADDRESS: '4y34oxREo5XJogMEb7B1kJJXYPBH8uYc9vu2fA8HxdFt', // Test address
-  MAX_TRANSACTIONS: 100,
-  BATCH_SIZE: 50,
-  MONTHS_TO_ANALYZE: 3
-};
-
+// Configuration
+const HELIUS_API_KEY = '77e76692-d441-4212-96ea-79b93c83a2ad'; // Replace with actual key
 const BASE_URL = 'https://api.helius.xyz/v0/';
 
-async function fetchCompleteTransactionHistory(address) {
-  let allTransactions = [];
-  let beforeSignature = null;
-  const threeMonthsAgo = Date.now() - (CONFIG.MONTHS_TO_ANALYZE * 30 * 24 * 60 * 60 * 1000);
+async function fetchTransactionDetails(address) {
+  if (!validateAddress(address)) {
+    console.error('Invalid Solana address format');
+    return null;
+  }
 
   try {
-    while (allTransactions.length < CONFIG.MAX_TRANSACTIONS) {
-      const url = new URL(`${BASE_URL}addresses/${address}/transactions`);
-      url.searchParams.append('api-key', CONFIG.HELIUS_API_KEY);
-      url.searchParams.append('limit', CONFIG.BATCH_SIZE.toString());
-      if (beforeSignature) url.searchParams.append('before', beforeSignature);
-
-      console.log(`Fetching batch before ${beforeSignature || 'start'}`);
-      const response = await fetch(url);
-      
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(`API Error ${response.status}: ${errorBody}`);
-      }
-
-      const transactions = await response.json();
-      if (transactions.length === 0) {
-        console.log('Reached end of transaction history');
-        break;
-      }
-
-      // Check if oldest tx is beyond our time window
-      const oldestTx = transactions[transactions.length - 1];
-      if (!oldestTx.timestamp || new Date(oldestTx.timestamp * 1000) < new Date(threeMonthsAgo)) {
-        console.log('Reached 3-month cutoff');
-        break;
-      }
-
-      allTransactions = [...allTransactions, ...transactions];
-      beforeSignature = oldestTx.signature;
-      
-      await new Promise(resolve => setTimeout(resolve, 200));
+    // Fetch recent transactions with full details
+    const transactions = await fetchTransactions(address, 5); // Get first 5 txs
+    if (!transactions || transactions.length === 0) {
+      console.log('No transactions found for this address');
+      return null;
     }
-    
-    return allTransactions;
+
+    // Display raw metadata of first transaction
+    console.log('First Transaction Metadata:');
+    console.log('--------------------------');
+    console.log(transactions[0]);
+
+    return {
+      address,
+      totalTransactions: transactions.length,
+      sampleTransaction: transactions[0] // Return first tx for inspection
+    };
   } catch (error) {
-    console.error('Fetch Error:', error.message);
+    console.error('Error:', error.message);
     return null;
   }
 }
 
-async function main() {
+// Helper functions
+function validateAddress(address) {
   try {
-    // 1. Validate address
-    new PublicKey(CONFIG.WALLET_ADDRESS);
-    console.log('✅ Address is valid');
-
-    // 2. Fetch transactions
-    console.log('⏳ Fetching transactions...');
-    const transactions = await fetchCompleteTransactionHistory(CONFIG.WALLET_ADDRESS);
-    
-    if (!transactions || transactions.length === 0) {
-      throw new Error(`
-        No transactions found. Possible reasons:
-        1. Wrong API key
-        2. New wallet with no history
-        3. Address not on mainnet
-        4. Helius API issues
-      `);
-    }
-
-    // 3. Show sample data
-    console.log('\n🎉 Success! Found', transactions.length, 'transactions');
-    console.log('\nSample Transaction:');
-    console.log('------------------');
-    const sample = transactions[0];
-    console.log({
-      signature: sample.signature,
-      date: sample.timestamp ? new Date(sample.timestamp * 1000).toISOString() : 'No timestamp',
-      fee: (sample.fee || 0) / LAMPORTS_PER_SOL + ' SOL',
-      type: sample.type || 'Unknown',
-      description: sample.description || 'No description'
-    });
-
-  } catch (error) {
-    console.error('\n❌ Error:', error.message);
-    console.log('\nDebug Steps:');
-    console.log('1. Verify address at https://explorer.solana.com/address/' + CONFIG.WALLET_ADDRESS);
-    console.log('2. Check API key at https://dev.helius.xyz/dashboard');
-    console.log('3. Try test address: vines1vzrYbzLMRdu58ou5XTby4qAqVRLmqo36NKPTg');
+    new PublicKey(address);
+    return true;
+  } catch {
+    return false;
   }
 }
 
-main();
+async function fetchTransactions(address, limit = 5) {
+  const url = `${BASE_URL}addresses/${address}/transactions?api-key=${HELIUS_API_KEY}&limit=${limit}`;
+  
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`API error: ${response.status}`);
+  }
+  return await response.json();
+}
+
+// Using your own wallet address
+async function main() {
+  // You can use ANY valid Solana address here, including your own wallet
+  const myWalletAddress = '4y34oxREo5XJogMEb7B1kJJXYPBH8uYc9vu2fA8HxdFt'; // Replace with your wallet address
+  
+  console.log(`Fetching data for address: ${myWalletAddress}`);
+  const result = await fetchTransactionDetails(myWalletAddress);
+  
+  if (result) {
+    console.log('\nSummary:');
+    console.log('--------');
+    console.log(`Address: ${result.address}`);
+    console.log(`Total Transactions Found: ${result.totalTransactions}`);
+    console.log('\nTip: To see full transaction data, check the "sampleTransaction" object above');
+  }
+}
+
+main().catch(console.error);
 
 // import fetch from 'node-fetch';
 // import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
