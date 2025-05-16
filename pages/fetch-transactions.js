@@ -244,3 +244,81 @@ async function main() {
 }
 
 main().catch(console.error);
+//     console.log('\n=== LAST 10 TRANSACTIONS ===');
+//     analysis.last10.forEach((tx, i) => {
+//       console.log(`\n#${i+1}: ${tx.signature}`);
+//       console.log(`📅 ${tx.date} | Fee: ${tx.fee} SOL | Value: $${tx.totalValue?.toFixed(2) || 'N/A'}`);
+//       tx.transfers.forEach((t, j) => {
+//         console.log(`   ${j+1}. ${t.symbol} ${t.amount} ($${t.value?.toFixed(2) || '?'})`);
+//         console.log(`      From: ${t.from?.slice(0,4)}...${t.from?.slice(-4)}`);
+//         console.log(`      To: ${t.to?.slice(0,4)}...${t.to?.slice(-4)}`);
+//       });
+//     });
+
+//     console.log('\n=== SUMMARY ===');
+//     console.log(`Total Transactions: ${processed.length}`);
+//     console.log(`Total SOL Moved: ${analysis.stats.totalSOL}`);
+//     console.log(`Estimated Total Value: $${analysis.stats.totalValue.toFixed(2)}`);
+
+//   } catch (error) {
+//     console.error('Error:', error.message);
+//   }
+// })();
+
+// Refined logic to extract relevant transfer info (filtered for user-to-user)
+
+// const filtered = transactions.map((tx) => {
+//   const transfers = [];
+
+//   // Filter SOL transfers (native)
+//   const nativeTransfers = tx.nativeTransfers?.filter(t => {
+//     if (!CONFIG.FILTER_APP_INTERACTIONS) return true;
+//     return t.from !== '11111111111111111111111111111111' &&
+//            t.to !== '11111111111111111111111111111111';
+//   }) || [];
+
+//   for (const t of nativeTransfers) {
+//     transfers.push({
+//       type: 'SOL',
+//       from: t.from,
+//       to: t.to,
+//       amount: t.amount / LAMPORTS_PER_SOL,
+//       symbol: 'SOL',
+//       name: 'Solana',
+//       decimals: 9,
+//       value: (t.amount / LAMPORTS_PER_SOL) * 20 // Assume $20 per SOL
+//     });
+//   }
+
+//   // Filter Token transfers (like USDC)
+//   const tokenTransfers = tx.tokenTransfers?.filter(t => {
+//     if (!CONFIG.FILTER_APP_INTERACTIONS) return true;
+//     return t.fromUserAccount !== '11111111111111111111111111111111' &&
+//            t.toUserAccount !== '11111111111111111111111111111111';
+//   }) || [];
+
+//   for (const t of tokenTransfers) {
+//     const meta = TOKEN_METADATA[t.mint] || { symbol: 'UNKNOWN', decimals: 9, name: 'Unknown Token' };
+//     const amount = t.amount / Math.pow(10, meta.decimals);
+
+//     transfers.push({
+//       type: 'Token',
+//       from: t.fromUserAccount,
+//       to: t.toUserAccount,
+//       amount,
+//       symbol: meta.symbol,
+//       name: meta.name,
+//       decimals: meta.decimals,
+//       value: amount * (meta.symbol === 'USDC' ? 1 : 0) // Add more pricing logic if needed
+//     });
+//   }
+
+//   return {
+//     signature: tx.signature,
+//     date: new Date(tx.blockTime * 1000).toISOString(),
+//     success: !tx.meta?.err,
+//     fee: tx.fee / LAMPORTS_PER_SOL,
+//     transfers,
+//     totalValue: transfers.reduce((sum, t) => sum + (t.value || 0), 0)
+//   };
+// });

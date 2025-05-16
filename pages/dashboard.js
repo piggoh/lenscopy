@@ -21,12 +21,13 @@ const WalletMultiButton = dynamic(
 )
 
 export default function Dashboard() {
-  const { publicKey, disconnect, connected } = useWallet()
+  const { publicKey, disconnect, connected, connecting } = useWallet()
   const { connection } = useConnection()
   const [balance, setBalance] = useState(null)
   const router = useRouter()
   const [transactions, setTransactions] = useState([])
   const [loadingTx, setLoadingTx] = useState(false)
+  const [error, setError] = useState(null)
 
   const handleDisconnect = async () => {
     try {
@@ -34,27 +35,51 @@ export default function Dashboard() {
       router.push('/')
     } catch (error) {
       console.error("Disconnect failed:", error)
+      setError("Failed to disconnect wallet")
     }
   }
 
+  // Check connection health
+  useEffect(() => {
+    const checkConnection = async () => {
+      try {
+        await connection.getVersion()
+        setError(null)
+      } catch (err) {
+        setError("Connection to Solana network failed")
+        console.error("Connection error:", err)
+      }
+    }
+    checkConnection()
+  }, [connection])
+
+  // Fetch transactions
   useEffect(() => {
     const fetchTransactions = async () => {
       if (!publicKey) return
       
       setLoadingTx(true)
       try {
-        const pubKey = new PublicKey(publicKey)
-        const txList = await connection.getConfirmedSignaturesForAddress2(pubKey, {
+        const txList = await connection.getConfirmedSignaturesForAddress2(publicKey, {
           limit: 10,
         })
 
-        // Get full transaction details
         const txDetails = await Promise.all(
-          txList.map(tx => connection.getTransaction(tx.signature)))
+          txList.map(tx => 
+            connection.getTransaction(tx.signature)
+              .catch(err => {
+                console.error("Error fetching tx:", tx.signature, err)
+                return null
+              })
+          )
+        )
         
         setTransactions(txDetails.filter(tx => tx !== null))
-      } catch (error) {
-        console.error("Error fetching transactions:", error)
+        setError(null)
+      } catch (err) {
+        console.error("Tx fetch error:", err)
+        setError("Failed to load transactions")
+        setTransactions([])
       } finally {
         setLoadingTx(false)
       }
@@ -66,21 +91,26 @@ export default function Dashboard() {
     return () => clearInterval(interval)
   }, [publicKey, connection])
 
+  // Redirect if not connected
   useEffect(() => {
-    if (!publicKey && connected === false) {
+    if (!publicKey && connected === false && !connecting) {
       router.push('/')
     }
-  }, [publicKey, connected, router])
+  }, [publicKey, connected, connecting, router])
 
+  // Fetch balance
   useEffect(() => {
     const fetchBalance = async () => {
-      if (publicKey) {
-        try {
-          const balance = await connection.getBalance(publicKey)
-          setBalance(balance / LAMPORTS_PER_SOL)
-        } catch (error) {
-          console.error("Error fetching balance:", error)
-        }
+      if (!publicKey) return
+      
+      try {
+        const balance = await connection.getBalance(publicKey)
+        setBalance(balance / LAMPORTS_PER_SOL)
+        setError(null)
+      } catch (err) {
+        console.error("Balance fetch error:", err)
+        setError("Failed to load balance")
+        setBalance(null)
       }
     }
     
@@ -89,6 +119,14 @@ export default function Dashboard() {
     
     return () => clearInterval(interval)
   }, [publicKey, connection])
+
+  if (connecting) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 flex items-center justify-center">
+        <div className="text-white text-xl">Connecting wallet...</div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800">
@@ -146,77 +184,86 @@ export default function Dashboard() {
       {/* Dashboard content */}
       <div className="pt-32 px-24">
         <h1 className="text-3xl font-bold text-white mb-6">Dashboard</h1>
+        {error && (
+          <div className="mb-6 p-4 bg-red-900/30 rounded-lg text-red-300">
+            {error}
+          </div>
+        )}
         {publicKey && (
           <div className="space-y-6">
             {/* Combined Credit Score and Wallet Info Section */}
-<div className="flex flex-col md:flex-row gap-6">
-  {/* New Credit Score Card - Left Side */}
-  <div className="p-6 rounded-lg bg-white/10 backdrop-blur-sm flex-1 max-w-xs">
-    <h2 className="text-xl font-semibold text-white mb-4">Credit Score</h2>
-    <div className="flex flex-col items-center">
-      <div className="relative w-40 h-40 mb-4">
-        <svg className="w-full h-full" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="45" fill="none" stroke="#2D3748" strokeWidth="8" />
-          <circle
-            cx="50"
-            cy="50"
-            r="45"
-            fill="none"
-            stroke="#4FD1C5"
-            strokeWidth="8"
-            strokeLinecap="round"
-            strokeDasharray="283"
-            strokeDashoffset="70"
-            transform="rotate(-90 50 50)"
-          />
-        </svg>
-        <div className="absolute inset-0 flex items-center justify-center flex-col">
-          <span className="text-4xl font-bold text-white">720</span>
-          <span className="text-sm text-gray-300">Good</span>
-        </div>
-      </div>
-      <div className="w-full space-y-2">
-        <div className="flex justify-between text-sm">
-          <span className="text-gray-300">Payment History</span>
-          <span className="font-medium text-green-400">Excellent</span>
-        </div>
-        <div className="flex justify-between text-sm">
-          <span className="text-gray-300">Credit Usage</span>
-          <span className="font-medium text-yellow-400">Good</span>
-        </div>
-        <div className="flex justify-between text-sm">
-          <span className="text-gray-300">Account Age</span>
-          <span className="font-medium text-blue-400">Fair</span>
-        </div>
-      </div>
-    </div>
-  </div>
+            <div className="flex flex-col md:flex-row gap-6">
+              {/* Credit Score Card - Left Side */}
+              <div className="p-6 rounded-lg bg-white/10 backdrop-blur-sm flex-1 max-w-xs">
+                <h2 className="text-xl font-semibold text-white mb-4">Credit Score</h2>
+                <div className="flex flex-col items-center">
+                  <div className="relative w-40 h-40 mb-4">
+                    <svg className="w-full h-full" viewBox="0 0 100 100">
+                      <circle cx="50" cy="50" r="45" fill="none" stroke="#2D3748" strokeWidth="8" />
+                      <circle
+                        cx="50"
+                        cy="50"
+                        r="45"
+                        fill="none"
+                        stroke="#4FD1C5"
+                        strokeWidth="8"
+                        strokeLinecap="round"
+                        strokeDasharray="283"
+                        strokeDashoffset="70"
+                        transform="rotate(-90 50 50)"
+                      />
+                    </svg>
+                    <div className="absolute inset-0 flex items-center justify-center flex-col">
+                      <span className="text-4xl font-bold text-white">720</span>
+                      <span className="text-sm text-gray-300">Good</span>
+                    </div>
+                  </div>
+                  <div className="w-full space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-300">Payment History</span>
+                      <span className="font-medium text-green-400">Excellent</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-300">Credit Usage</span>
+                      <span className="font-medium text-yellow-400">Good</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-300">Account Age</span>
+                      <span className="font-medium text-blue-400">Fair</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
-    {/* Existing Wallet Info Card - Right Side */}
-    <div className="p-6 rounded-lg bg-white/10 backdrop-blur-sm flex-1">
-        <h2 className="text-xl font-semibold text-white mb-4">Wallet Information</h2>
-        <div className="space-y-2">
-         <p className="text-sm text-gray-300">Connected Wallet:</p>
-        <code className="text-xs text-white break-all block p-2 bg-black/20 rounded">
-            {publicKey.toString()}
-        </code>
-        </div>
-        <div className="pt-4 border-t border-white/10">
-        <p className="text-sm text-gray-300">Wallet Balance:</p>
-        <div className="flex items-center mt-2">
-            <span className="text-2xl font-bold text-white">
-            {balance !== null ? balance.toFixed(4) : '--.--'}
-            </span>
-            <span className="ml-2 text-lg text-blue-300">SOL</span>
-            {balance !== null && (
-            <span className="ml-auto text-sm text-gray-400">
-                ≈ ${(balance * 20).toFixed(2)}
-            </span>
-            )}
-        </div>
-        </div>
-    </div>
-    </div>
+              {/* Wallet Info Card - Right Side */}
+              <div className="p-6 rounded-lg bg-white/10 backdrop-blur-sm flex-1">
+                <h2 className="text-xl font-semibold text-white mb-4">Wallet Information</h2>
+                <div className="space-y-2">
+                  <p className="text-sm text-gray-300">Connected Wallet:</p>
+                  <code className="text-xs text-white break-all block p-2 bg-black/20 rounded">
+                    {publicKey.toString()}
+                  </code>
+                </div>
+                <div className="pt-4 border-t border-white/10">
+                  <p className="text-sm text-gray-300">Wallet Balance:</p>
+                  {error ? (
+                    <p className="text-red-400 text-sm mt-2">Error loading balance</p>
+                  ) : (
+                    <div className="flex items-center mt-2">
+                      <span className="text-2xl font-bold text-white">
+                        {balance !== null ? balance.toFixed(4) : '--.--'}
+                      </span>
+                      <span className="ml-2 text-lg text-blue-300">SOL</span>
+                      {balance !== null && (
+                        <span className="ml-auto text-sm text-gray-400">
+                          ≈ ${(balance * 20).toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
 
             {/* Transactions Card */}
             <div className="p-6 rounded-lg bg-white/10 backdrop-blur-sm">
@@ -226,35 +273,44 @@ export default function Dashboard() {
                 <div className="flex justify-center py-8">
                   <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
                 </div>
+              ) : error ? (
+                <div className="text-red-400 text-center py-6">{error}</div>
               ) : transactions.length > 0 ? (
                 <div className="space-y-3">
-                  {transactions.map((tx, index) => (
-                    <div key={index} className="p-3 rounded-md bg-black/20 hover:bg-white/5 transition-colors">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <p className="text-sm font-medium text-white">
-                            {tx.transaction.message.instructions[0]?.programId.toString().slice(0, 8)}...
-                          </p>
-                          <p className="text-xs text-gray-400 mt-1">
-                            {new Date(tx.blockTime * 1000).toLocaleString()}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm text-green-300">
-                            {(tx.meta?.postBalances[0] / LAMPORTS_PER_SOL - tx.meta?.preBalances[0] / LAMPORTS_PER_SOL).toFixed(4)} SOL
-                          </p>
-                          <a 
-                            href={`https://solscan.io/tx/${tx.transaction.signatures[0]}`} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-xs text-blue-400 hover:underline"
-                          >
-                            View on Solscan
-                          </a>
+                  {transactions.map((tx, index) => {
+                    if (!tx) return null
+                    
+                    const signature = tx.transaction.signatures[0]
+                    const date = tx.blockTime ? new Date(tx.blockTime * 1000).toLocaleString() : 'Unknown time'
+                    const amount = tx.meta ? 
+                      (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL : 0
+
+                    return (
+                      <div key={index} className="p-3 rounded-md bg-black/20 hover:bg-white/5 transition-colors">
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <p className="text-sm font-medium text-white">
+                              {tx.transaction.message.instructions[0]?.programId.toString().slice(0, 8)}...
+                            </p>
+                            <p className="text-xs text-gray-400 mt-1">{date}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className={`text-sm ${amount >= 0 ? 'text-green-300' : 'text-red-300'}`}>
+                              {amount.toFixed(4)} SOL
+                            </p>
+                            <a 
+                              href={`https://solscan.io/tx/${signature}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-blue-400 hover:underline"
+                            >
+                              View on Solscan
+                            </a>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               ) : (
                 <p className="text-gray-400 text-center py-6">No recent transactions found</p>
