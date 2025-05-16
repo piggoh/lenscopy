@@ -1,249 +1,246 @@
 import fetch from 'node-fetch';
-import { PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
 
 // Configuration
-const HELIUS_API_KEY = '77e76692-d441-4212-96ea-79b93c83a2ad'; // Replace with actual key
+const HELIUS_API_KEY = '77e76692-d441-4212-96ea-79b93c83a2ad';
 const BASE_URL = 'https://api.helius.xyz/v0/';
 
-async function fetchTransactionDetails(address) {
-  if (!validateAddress(address)) {
-    console.error('Invalid Solana address format');
-    return null;
+// Create connection to Solana blockchain
+const connection = new Connection(clusterApiUrl("mainnet-beta"), "confirmed");
+
+// Cache for token metadata to avoid repeated API calls
+const tokenMetadataCache = new Map();
+
+// Function to fetch token metadata with rate limiting
+async function fetchTokenMetadata(mintAddress) {
+  if (tokenMetadataCache.has(mintAddress)) {
+    return tokenMetadataCache.get(mintAddress);
   }
 
   try {
-    // Fetch recent transactions with full details
-    const transactions = await fetchTransactions(address, 5); // Get first 5 txs
-    if (!transactions || transactions.length === 0) {
-      console.log('No transactions found for this address');
-      return null;
+    // Add delay between API calls
+    await new Promise(resolve => setTimeout(resolve, 200));
+    
+    const url = `${BASE_URL}token-metadata?api-key=${HELIUS_API_KEY}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mintAccounts: [mintAddress] })
+    });
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
     }
 
-    // Display raw metadata of first transaction
-    console.log('First Transaction Metadata:');
-    console.log('--------------------------');
-    console.log(transactions[0]);
-
-    return {
-      address,
-      totalTransactions: transactions.length,
-      sampleTransaction: transactions[0] // Return first tx for inspection
-    };
+    const data = await response.json();
+    if (data && data.length > 0) {
+      tokenMetadataCache.set(mintAddress, data[0]);
+      return data[0];
+    }
+    return null;
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error('Error fetching token metadata:', error);
     return null;
   }
 }
 
-// Helper functions
-function validateAddress(address) {
+// Helper function to validate Solana address
+function validateSolanaAddress(address) {
   try {
     new PublicKey(address);
     return true;
-  } catch {
+  } catch (error) {
     return false;
   }
 }
 
-async function fetchTransactions(address, limit = 5) {
-  const url = `${BASE_URL}addresses/${address}/transactions?api-key=${HELIUS_API_KEY}&limit=${limit}`;
+// Function to calculate wallet metrics
+async function calculateWalletMetrics(transactions) {
+  const metrics = {
+    activeDays: new Set(),
+    interactedWallets: new Set(),
+    assetHistory: new Map(), // Map of token -> array of {timestamp, value}
+    firstTransactionDate: null,
+    lastTransactionDate: null
+  };
+
+  // Sort transactions by timestamp
+  const sortedTransactions = transactions.sort((a, b) => a.timestamp - b.timestamp);
   
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
+  if (sortedTransactions.length > 0) {
+    metrics.firstTransactionDate = new Date(sortedTransactions[0].timestamp * 1000);
+    metrics.lastTransactionDate = new Date(sortedTransactions[sortedTransactions.length - 1].timestamp * 1000);
   }
-  return await response.json();
+
+  for (const tx of sortedTransactions) {
+    const txDate = new Date(tx.timestamp * 1000);
+    metrics.activeDays.add(txDate.toISOString().split('T')[0]);
+
+    // Track interacted wallets
+    tx.transfers.forEach(transfer => {
+      if (transfer.from) metrics.interactedWallets.add(transfer.from);
+      if (transfer.to) metrics.interactedWallets.add(transfer.to);
+    });
+
+    // Track asset history
+    tx.transfers.forEach(transfer => {
+      if (!metrics.assetHistory.has(transfer.type)) {
+        metrics.assetHistory.set(transfer.type, []);
+      }
+      metrics.assetHistory.get(transfer.type).push({
+        timestamp: tx.timestamp,
+        value: transfer.value
+      });
+    });
+  }
+
+  return metrics;
 }
 
-// Using your own wallet address
+async function fetchTransactions(address, batchSize = 100) {
+  try {
+    if (!validateSolanaAddress(address)) {
+      throw new Error('Invalid Solana address format');
+    }
+
+    const allTransactions = [];
+    let before = '';
+    
+    while (true) {
+      const url = `${BASE_URL}addresses/${address}/transactions?api-key=${HELIUS_API_KEY}&before=${before}&limit=${batchSize}`;
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+      
+      const transactions = await response.json();
+      if (!transactions || transactions.length === 0) break;
+      
+      allTransactions.push(...transactions);
+      before = transactions[transactions.length - 1].signature;
+      
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
+    // Process transactions with token metadata
+    const processedTransactions = await Promise.all(allTransactions.map(async tx => {
+      const timestamp = new Date(tx.timestamp * 1000);
+      
+      // Process token transfers with metadata
+      const tokenTransfers = await Promise.all((tx.tokenTransfers || []).map(async transfer => {
+        const metadata = await fetchTokenMetadata(transfer.mint);
+        return {
+          type: metadata?.name || transfer.mint,
+          symbol: metadata?.symbol || 'UNKNOWN',
+          value: transfer.tokenAmount / Math.pow(10, transfer.decimals),
+          from: transfer.fromUserAccount,
+          to: transfer.toUserAccount
+        };
+      }));
+
+      const solTransfers = (tx.nativeTransfers || []).map(transfer => ({
+        type: 'SOL',
+        symbol: 'SOL',
+        value: transfer.amount / 1e9,
+        from: transfer.fromUserAccount,
+        to: transfer.toUserAccount
+      }));
+
+      return {
+        signature: tx.signature,
+        timestamp,
+        transfers: [...tokenTransfers, ...solTransfers]
+      };
+    }));
+
+    // Calculate metrics
+    const metrics = await calculateWalletMetrics(processedTransactions);
+    
+    return {
+      address,
+      creationDate: metrics.firstTransactionDate,
+      transactions: processedTransactions,
+      metrics: {
+        activeDays: metrics.activeDays.size,
+        totalDays: Math.ceil((metrics.lastTransactionDate - metrics.firstTransactionDate) / (1000 * 60 * 60 * 24)),
+        interactedWallets: metrics.interactedWallets.size,
+        assetHistory: metrics.assetHistory
+      }
+    };
+  } catch (error) {
+    console.error('Error fetching transactions:', error);
+    throw error;
+  }
+}
+
 async function main() {
-  // You can use ANY valid Solana address here, including your own wallet
-  const myWalletAddress = '4y34oxREo5XJogMEb7B1kJJXYPBH8uYc9vu2fA8HxdFt'; // Replace with your wallet address
+  const walletAddress = '4y34oxREo5XJogMEb7B1kJJXYPBH8uYc9vu2fA8HxdFt';
   
-  console.log(`Fetching data for address: ${myWalletAddress}`);
-  const result = await fetchTransactionDetails(myWalletAddress);
-  
-  if (result) {
-    console.log('\nSummary:');
-    console.log('--------');
+  try {
+    console.log(`Fetching data for address: ${walletAddress}`);
+    const result = await fetchTransactions(walletAddress);
+    
+    console.log('\nWallet Information:');
+    console.log('------------------');
     console.log(`Address: ${result.address}`);
-    console.log(`Total Transactions Found: ${result.totalTransactions}`);
-    console.log('\nTip: To see full transaction data, check the "sampleTransaction" object above');
+    // Fix date formatting
+    const creationDate = result.creationDate ? new Date(result.creationDate).toLocaleString('en-US', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    }) : 'Unknown';
+    console.log(`Creation Date: ${creationDate}`);
+    console.log(`Total Transactions: ${result.transactions.length}`);
+    
+    // Print metrics
+    console.log('\nWallet Metrics:');
+    console.log('------------------');
+    console.log(`Active Days: ${result.metrics.activeDays}`);
+    console.log(`Total Days: ${result.metrics.totalDays}`);
+    console.log(`Activity Ratio: ${((result.metrics.activeDays / result.metrics.totalDays) * 100).toFixed(2)}%`);
+    console.log(`Unique Interacted Wallets: ${result.metrics.interactedWallets}`);
+    
+    // Print 10 latest transactions with token names
+    console.log('\n10 Latest Transactions:');
+    console.log('------------------');
+    const latestTransactions = result.transactions.slice(-10).reverse();
+    latestTransactions.forEach((tx, index) => {
+      console.log(`\nTransaction ${index + 1}:`);
+      console.log(`Signature: ${tx.signature}`);
+      console.log(`Timestamp: ${tx.timestamp.toLocaleString()}`);
+      console.log('Transfers:');
+      tx.transfers.forEach((transfer, idx) => {
+        console.log(`  ${idx + 1}. Type: ${transfer.type} (${transfer.symbol})`);
+        console.log(`     Value: ${transfer.value}`);
+        console.log(`     From: ${transfer.from}`);
+        console.log(`     To: ${transfer.to}`);
+      });
+    });
+
+    // Print 10 oldest transactions with token names
+    console.log('\n10 Oldest Transactions:');
+    console.log('------------------');
+    const oldestTransactions = result.transactions.slice(0, 10);
+    oldestTransactions.forEach((tx, index) => {
+      console.log(`\nTransaction ${index + 1}:`);
+      console.log(`Signature: ${tx.signature}`);
+      console.log(`Timestamp: ${tx.timestamp.toLocaleString()}`);
+      console.log('Transfers:');
+      tx.transfers.forEach((transfer, idx) => {
+        console.log(`  ${idx + 1}. Type: ${transfer.type} (${transfer.symbol})`);
+        console.log(`     Value: ${transfer.value}`);
+        console.log(`     From: ${transfer.from}`);
+        console.log(`     To: ${transfer.to}`);
+      });
+    });
+  } catch (error) {
+    console.error('Error:', error.message);
   }
 }
 
 main().catch(console.error);
-
-// import fetch from 'node-fetch';
-// import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
-
-// // Configuration
-// const CONFIG = {
-//   HELIUS_API_KEY: '77e76692-d441-4212-96ea-79b93c83a2ad',
-//   WALLET_ADDRESS: '4y34oxREo5XJogMEb7B1kJJXYPBH8uYc9vu2fA8HxdFt',
-//   MAX_TRANSACTIONS: 1000,
-//   BATCH_SIZE: 50,
-//   FILTER_APP_INTERACTIONS: true // New config for requirement #1
-// };
-
-// // Enhanced token metadata cache
-// const TOKEN_METADATA = {
-//   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': {
-//     symbol: 'USDC',
-//     decimals: 6,
-//     name: 'USD Coin'
-//   }
-//   // Add more tokens as needed
-// };
-
-// async function fetchAllTransactions(address, apiKey) {
-//   let allTransactions = [];
-//   let beforeSignature = null;
-  
-//   while (allTransactions.length < CONFIG.MAX_TRANSACTIONS) {
-//     const url = new URL(`https://api.helius.xyz/v0/addresses/${address}/transactions`);
-//     url.searchParams.append('api-key', apiKey);
-//     url.searchParams.append('limit', CONFIG.BATCH_SIZE.toString());
-//     if (beforeSignature) url.searchParams.append('before', beforeSignature);
-
-//     const response = await fetch(url);
-//     if (!response.ok) throw new Error(`API Error: ${response.status}`);
-    
-//     const transactions = await response.json();
-//     if (transactions.length === 0) break;
-    
-//     allTransactions = [...allTransactions, ...transactions];
-//     beforeSignature = transactions[transactions.length - 1].signature;
-    
-//     await new Promise(resolve => setTimeout(resolve, 200));
-//   }
-  
-//   return allTransactions;
-// }
-
-// function processTransactions(transactions) {
-//   return transactions
-//     .map(tx => {
-//       // Filter out app interactions if enabled (Requirement #1)
-//       if (CONFIG.FILTER_APP_INTERACTIONS && 
-//           tx.instructions?.some(i => i.programId === '11111111111111111111111111111111')) {
-//         return null;
-//       }
-
-//       const date = tx.blockTime ? new Date(tx.blockTime * 1000) : null;
-      
-//       // Enhanced token handling (Requirement #2)
-//       const tokenTransfers = (tx.tokenTransfers || []).map(t => {
-//         const meta = TOKEN_METADATA[t.mint] || { decimals: 9, symbol: 'UNKNOWN', name: 'Unknown Token' };
-//         return {
-//           type: 'Token',
-//           symbol: meta.symbol,
-//           name: meta.name,
-//           from: t.fromUserAccount,
-//           to: t.toUserAccount,
-//           amount: t.amount / Math.pow(10, meta.decimals),
-//           value: null, // Will be filled later if we have price data
-//           mint: t.mint
-//         };
-//       });
-
-//       const solTransfers = (tx.nativeTransfers || []).map(t => ({
-//         type: 'SOL',
-//         symbol: 'SOL',
-//         name: 'Solana',
-//         from: t.from,
-//         to: t.to,
-//         amount: t.amount / LAMPORTS_PER_SOL,
-//         value: null
-//       }));
-
-//       return {
-//         signature: tx.signature,
-//         timestamp: tx.blockTime,
-//         date: date?.toISOString() || 'Pending',
-//         fee: tx.fee / LAMPORTS_PER_SOL,
-//         success: !tx.meta?.err,
-//         program: tx.instructions?.[0]?.programId,
-//         transfers: [...solTransfers, ...tokenTransfers],
-//         isAppInteraction: tx.instructions?.some(i => i.programId === '11111111111111111111111111111111')
-//       };
-//     })
-//     .filter(tx => tx !== null); // Remove filtered transactions
-// }
-
-// function analyzeTransactions(transactions) {
-//   // Requirement #3: Get first 10 and last 10
-//   const first10 = transactions.slice(0, 10);
-//   const last10 = transactions.slice(-10);
-  
-//   // Requirement #4: Calculate values (mock - replace with real price feed)
-//   const solPrice = 20; // $20/SOL mock price
-//   const tokenPrices = { USDC: 1 }; // Mock prices
-  
-//   const withValues = transactions.map(tx => {
-//     const valuedTransfers = tx.transfers.map(t => {
-//       let value = 0;
-//       if (t.type === 'SOL') value = t.amount * solPrice;
-//       if (t.type === 'Token' && tokenPrices[t.symbol]) value = t.amount * tokenPrices[t.symbol];
-//       return { ...t, value };
-//     });
-    
-//     const totalValue = valuedTransfers.reduce((sum, t) => sum + (t.value || 0), 0);
-//     return { ...tx, transfers: valuedTransfers, totalValue };
-//   });
-
-//   return {
-//     first10: withValues.slice(0, 10),
-//     last10: withValues.slice(-10),
-//     all: withValues,
-//     stats: {
-//       totalSOL: withValues.reduce((sum, tx) => sum + 
-//         tx.transfers.filter(t => t.type === 'SOL').reduce((s, t) => s + t.amount, 0), 0),
-//       totalValue: withValues.reduce((sum, tx) => sum + tx.totalValue, 0)
-//     }
-//   };
-// }
-
-// (async () => {
-//   try {
-//     new PublicKey(CONFIG.WALLET_ADDRESS);
-    
-//     const rawTransactions = await fetchAllTransactions(
-//       CONFIG.WALLET_ADDRESS,
-//       CONFIG.HELIUS_API_KEY
-//     );
-    
-//     const processed = processTransactions(rawTransactions);
-//     const analysis = analyzeTransactions(processed);
-
-//     console.log('\n=== FIRST 10 TRANSACTIONS ===');
-//     analysis.first10.forEach((tx, i) => {
-//       console.log(`\n#${i+1}: ${tx.signature}`);
-//       console.log(`📅 ${tx.date} | Fee: ${tx.fee} SOL | Value: $${tx.totalValue?.toFixed(2) || 'N/A'}`);
-//       tx.transfers.forEach((t, j) => {
-//         console.log(`   ${j+1}. ${t.symbol} ${t.amount} ($${t.value?.toFixed(2) || '?'})`);
-//         console.log(`      From: ${t.from?.slice(0,4)}...${t.from?.slice(-4)}`);
-//         console.log(`      To: ${t.to?.slice(0,4)}...${t.to?.slice(-4)}`);
-//       });
-//     });
-
-//     console.log('\n=== LAST 10 TRANSACTIONS ===');
-//     analysis.last10.forEach((tx, i) => {
-//       console.log(`\n#${i+1}: ${tx.signature}`);
-//       console.log(`📅 ${tx.date} | Fee: ${tx.fee} SOL | Value: $${tx.totalValue?.toFixed(2) || 'N/A'}`);
-//       tx.transfers.forEach((t, j) => {
-//         console.log(`   ${j+1}. ${t.symbol} ${t.amount} ($${t.value?.toFixed(2) || '?'})`);
-//         console.log(`      From: ${t.from?.slice(0,4)}...${t.from?.slice(-4)}`);
-//         console.log(`      To: ${t.to?.slice(0,4)}...${t.to?.slice(-4)}`);
-//       });
-//     });
-
-//     console.log('\n=== SUMMARY ===');
-//     console.log(`Total Transactions: ${processed.length}`);
-//     console.log(`Total SOL Moved: ${analysis.stats.totalSOL}`);
-//     console.log(`Estimated Total Value: $${analysis.stats.totalValue.toFixed(2)}`);
-
-//   } catch (error) {
-//     console.error('Error:', error.message);
-//   }
-// })();
