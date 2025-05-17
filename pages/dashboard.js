@@ -21,13 +21,177 @@ const WalletMultiButton = dynamic(
 )
 
 export default function Dashboard() {
-  const { publicKey, disconnect, connected, connecting } = useWallet()
+  const { publicKey: connectedKey, disconnect, connected, connecting } = useWallet()
   const { connection } = useConnection()
-  const [balance, setBalance] = useState(null)
   const router = useRouter()
+  const [balance, setBalance] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [loadingTx, setLoadingTx] = useState(false)
   const [error, setError] = useState(null)
+  const [currentPublicKey, setCurrentPublicKey] = useState(null)
+  const [connectionHealthy, setConnectionHealthy] = useState(true)
+
+  // Connection health check
+  useEffect(() => {
+    const checkConnection = async () => {
+      try {
+        const version = await connection.getVersion()
+        console.log("Solana connection OK:", version)
+        setConnectionHealthy(true)
+        if (error?.includes('Connection')) setError(null)
+      } catch (err) {
+        console.error("Connection check failed:", err)
+        setConnectionHealthy(false)
+        setError("Connection to Solana network failed. Please try again later.")
+        setTimeout(checkConnection, 10000) // Retry every 10 seconds
+      }
+    }
+
+    checkConnection()
+    const interval = setInterval(checkConnection, 30000)
+    return () => {
+      clearInterval(interval)
+      clearTimeout(checkConnection)
+    }
+  }, [connection, error])
+  
+  useEffect(() => {
+    console.log("ACTIVE CONNECTION DETAILS:", {
+      endpoint: connection.rpcEndpoint,
+      commitment: connection.commitment,
+      httpHeaders: connection._httpHeaders
+    });
+  
+    // Test connection immediately
+    connection.getVersion().then(v => {
+      console.log("CONNECTION TEST SUCCESS:", v);
+    }).catch(e => {
+      console.error("CONNECTION TEST FAILED:", e);
+    });
+  }, [connection]);
+
+  // Set the public key to use
+  useEffect(() => {
+    if (connectedKey) {
+      setCurrentPublicKey(connectedKey)
+    } else if (router.query.publicKey) {
+      try {
+        const pubKey = new PublicKey(router.query.publicKey)
+        setCurrentPublicKey(pubKey)
+      } catch (err) {
+        console.error("Invalid public key:", err)
+        setError("Invalid wallet address format")
+      }
+    }
+  }, [connectedKey, router.query.publicKey])
+
+  useEffect(() => {
+    if (!currentPublicKey) return
+  
+    const loadData = async () => {
+      console.log("Starting data load...")
+      try {
+        const balanceSuccess = await fetchBalanceWithRetry()
+        if (balanceSuccess) {
+          await fetchTransactionsWithRetry()
+        }
+      } catch (err) {
+        console.error("Data load failed:", err)
+      }
+    }
+  
+    loadData()
+    const interval = setInterval(loadData, 30000)
+    return () => clearInterval(interval)
+  }, [currentPublicKey])
+
+  const fetchBalanceWithRetry = async (retries = 3) => {
+    try {
+      console.log(`Fetching balance for ${currentPublicKey}`)
+      const balance = await connection.getBalance(currentPublicKey, {
+        commitment: 'confirmed'
+      })
+      console.log(`Raw balance: ${balance} lamports`)
+      setBalance(balance / LAMPORTS_PER_SOL)
+      return true
+    } catch (err) {
+      console.error("Balance fetch error:", err)
+      if (retries > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1500))
+        return fetchBalanceWithRetry(retries - 1)
+      }
+      setError(`Balance Error: ${err.message}`)
+      return false
+    }
+  }
+
+  const fetchTransactionsWithRetry = async (retries = 3) => {
+    setLoadingTx(true)
+    try {
+      console.log(`Fetching txs for ${currentPublicKey}`)
+      const signatures = await connection.getConfirmedSignaturesForAddress2(
+        currentPublicKey, 
+        {
+          limit: 10,
+          commitment: 'confirmed'
+        }
+      )
+  
+      const txDetails = await Promise.all(
+        signatures.map(sig => connection.getParsedTransaction(
+          sig.signature,
+          {
+            maxSupportedTransactionVersion: 0,
+            commitment: 'confirmed'
+          }
+        ))
+      )
+  
+      setTransactions(txDetails.filter(tx => tx !== null))
+      return true
+    } catch (err) {
+      console.error("Tx fetch error:", err)
+      if (retries > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1500))
+        return fetchTransactionsWithRetry(retries - 1)
+      }
+      setError(`Transactions Error: ${err.message}`)
+      return false
+    } finally {
+      setLoadingTx(false)
+    }
+  }
+  // Data refresh logic
+  useEffect(() => {
+    if (!currentPublicKey) return
+
+    const loadData = async () => {
+      const balanceSuccess = await fetchBalanceWithRetry()
+      if (balanceSuccess) {
+        await fetchTransactionsWithRetry()
+      }
+    }
+
+    loadData()
+    const interval = setInterval(loadData, 30000)
+    return () => clearInterval(interval)
+  }, [currentPublicKey, connectionHealthy])
+
+  useEffect(() => {
+    console.log("Active RPC Endpoint:", connection.rpcEndpoint)
+    connection.getVersion().then(v => {
+      console.log("Connection version:", v)
+    }).catch(e => {
+      console.error("Connection test failed:", e)
+    })
+  }, [connection])
+
+  // Redirect if no wallet
+  useEffect(() => {
+    if (!currentPublicKey && connected === false && !connecting) {
+      router.push('/')
+    }
+  }, [currentPublicKey, connected, connecting, router])
 
   const handleDisconnect = async () => {
     try {
@@ -39,87 +203,6 @@ export default function Dashboard() {
     }
   }
 
-  // Check connection health
-  useEffect(() => {
-    const checkConnection = async () => {
-      try {
-        await connection.getVersion()
-        setError(null)
-      } catch (err) {
-        setError("Connection to Solana network failed")
-        console.error("Connection error:", err)
-      }
-    }
-    checkConnection()
-  }, [connection])
-
-  // Fetch transactions
-  useEffect(() => {
-    const fetchTransactions = async () => {
-      if (!publicKey) return
-      
-      setLoadingTx(true)
-      try {
-        const txList = await connection.getConfirmedSignaturesForAddress2(publicKey, {
-          limit: 10,
-        })
-
-        const txDetails = await Promise.all(
-          txList.map(tx => 
-            connection.getTransaction(tx.signature)
-              .catch(err => {
-                console.error("Error fetching tx:", tx.signature, err)
-                return null
-              })
-          )
-        )
-        
-        setTransactions(txDetails.filter(tx => tx !== null))
-        setError(null)
-      } catch (err) {
-        console.error("Tx fetch error:", err)
-        setError("Failed to load transactions")
-        setTransactions([])
-      } finally {
-        setLoadingTx(false)
-      }
-    }
-
-    fetchTransactions()
-    const interval = setInterval(fetchTransactions, 30000)
-    
-    return () => clearInterval(interval)
-  }, [publicKey, connection])
-
-  // Redirect if not connected
-  useEffect(() => {
-    if (!publicKey && connected === false && !connecting) {
-      router.push('/')
-    }
-  }, [publicKey, connected, connecting, router])
-
-  // Fetch balance
-  useEffect(() => {
-    const fetchBalance = async () => {
-      if (!publicKey) return
-      
-      try {
-        const balance = await connection.getBalance(publicKey)
-        setBalance(balance / LAMPORTS_PER_SOL)
-        setError(null)
-      } catch (err) {
-        console.error("Balance fetch error:", err)
-        setError("Failed to load balance")
-        setBalance(null)
-      }
-    }
-    
-    fetchBalance()
-    const interval = setInterval(fetchBalance, 15000)
-    
-    return () => clearInterval(interval)
-  }, [publicKey, connection])
-
   if (connecting) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800 flex items-center justify-center">
@@ -130,7 +213,17 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-gray-800">
-      {/* Lens Logo - Top Left */}
+      {/* Connection status indicator */}
+      <div className="fixed bottom-4 right-4 z-50 flex items-center">
+        <span className={`w-3 h-3 rounded-full mr-2 ${error ? 'bg-red-500' : 'bg-green-500'}`} />
+        <span className="text-xs text-gray-300">
+          {error ? 'Disconnected' : 'Connected'}
+        </span>
+      </div>
+
+      {/* Rest of your JSX remains exactly the same */}
+      {/* [Keep all your existing JSX here - it's correct] */}
+      {/* Lens Logo */}
       <div className="fixed left-4 top-4 z-40">
         <div className="relative flex flex-col items-center place-items-center text-center before:absolute before:h-[300px] before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700/10 after:dark:from-sky-900 after:dark:via-[#0141ff]/40 before:lg:h-[360px]">
           <NextImage
@@ -144,7 +237,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Wallet Button - Top Right */}
+      {/* Wallet Button */}
       <div className="fixed right-4 top-4 z-50">
         {connected ? (
           <button
@@ -184,12 +277,20 @@ export default function Dashboard() {
       {/* Dashboard content */}
       <div className="pt-32 px-24">
         <h1 className="text-3xl font-bold text-white mb-6">Dashboard</h1>
+        
         {error && (
           <div className="mb-6 p-4 bg-red-900/30 rounded-lg text-red-300">
             {error}
+            <button 
+              onClick={() => window.location.reload()} 
+              className="ml-2 underline"
+            >
+              Refresh Page
+            </button>
           </div>
         )}
-        {publicKey && (
+
+        {currentPublicKey && (
           <div className="space-y-6">
             {/* Combined Credit Score and Wallet Info Section */}
             <div className="flex flex-col md:flex-row gap-6">
@@ -239,48 +340,59 @@ export default function Dashboard() {
               <div className="p-6 rounded-lg bg-white/10 backdrop-blur-sm flex-1">
                 <h2 className="text-xl font-semibold text-white mb-4">Wallet Information</h2>
                 <div className="space-y-2">
-                  <p className="text-sm text-gray-300">Connected Wallet:</p>
+                  <p className="text-sm text-gray-300">Wallet Address:</p>
                   <code className="text-xs text-white break-all block p-2 bg-black/20 rounded">
-                    {publicKey.toString()}
+                    {currentPublicKey.toString()}
                   </code>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {connected ? "Connected via wallet" : "Entered manually"}
+                  </p>
                 </div>
                 <div className="pt-4 border-t border-white/10">
-                  <p className="text-sm text-gray-300">Wallet Balance:</p>
-                  {error ? (
-                    <p className="text-red-400 text-sm mt-2">Error loading balance</p>
-                  ) : (
-                    <div className="flex items-center mt-2">
-                      <span className="text-2xl font-bold text-white">
-                        {balance !== null ? balance.toFixed(4) : '--.--'}
-                      </span>
-                      <span className="ml-2 text-lg text-blue-300">SOL</span>
-                      {balance !== null && (
-                        <span className="ml-auto text-sm text-gray-400">
-                          ≈ ${(balance * 20).toFixed(2)}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
+  <p className="text-sm text-gray-300">Wallet Balance:</p>
+  {balance === null ? (
+    loadingTx ? (
+      <div className="flex items-center mt-2">
+        <span className="text-2xl font-bold text-white">Loading...</span>
+      </div>
+    ) : (
+      <p className="text-red-400 text-sm mt-2">
+        {error || "Failed to load balance"}
+      </p>
+    )
+  ) : (
+    <div className="flex items-center mt-2">
+      <span className="text-2xl font-bold text-white">
+        {balance.toFixed(4)}
+      </span>
+      <span className="ml-2 text-lg text-blue-300">SOL</span>
+      <span className="ml-auto text-sm text-gray-400">
+        ≈ ${(balance * 20).toFixed(2)}
+      </span>
+    </div>
+  )}
+</div>
               </div>
             </div>
 
             {/* Transactions Card */}
             <div className="p-6 rounded-lg bg-white/10 backdrop-blur-sm">
-              <h2 className="text-xl font-semibold text-white mb-4">Recent Transactions</h2>
-              
-              {loadingTx ? (
-                <div className="flex justify-center py-8">
-                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
-                </div>
+            <h2 className="text-xl font-semibold text-white mb-4">Recent Transactions</h2>
+  
+            {loadingTx ? (
+              <div className="text-center py-6 text-gray-400">
+                Loading transactions...
+              </div>
               ) : error ? (
-                <div className="text-red-400 text-center py-6">{error}</div>
+                <div className="text-red-400 text-center py-6">
+                  {error.includes('transaction') ? error : "Transaction load failed"}
+                </div>
               ) : transactions.length > 0 ? (
                 <div className="space-y-3">
                   {transactions.map((tx, index) => {
                     if (!tx) return null
                     
-                    const signature = tx.transaction.signatures[0]
+                    const signature = tx.signatures[0]
                     const date = tx.blockTime ? new Date(tx.blockTime * 1000).toLocaleString() : 'Unknown time'
                     const amount = tx.meta ? 
                       (tx.meta.postBalances[0] - tx.meta.preBalances[0]) / LAMPORTS_PER_SOL : 0
